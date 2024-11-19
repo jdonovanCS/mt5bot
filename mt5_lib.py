@@ -252,7 +252,11 @@ def place_order(order_type, symbol, volume, stop_loss, take_profit, comment, sto
         if stop_price <= 0:
             raise ValueError("Stop Price cannot be zero")
         else:
-            request['price'] = stop_price
+            ask = MetaTrader5.symbol_info_tick(symbol).ask
+            if ask > stop_price:
+                request['price'] = ask
+            else:
+                request['price'] = stop_price
     elif order_type == "BUY":
         request['type'] = MetaTrader5.ORDER_TYPE_BUY
         request['action'] = MetaTrader5.TRADE_ACTION_DEAL
@@ -260,7 +264,11 @@ def place_order(order_type, symbol, volume, stop_loss, take_profit, comment, sto
         if stop_price <= 0:
             raise ValueError("Stop price cannot be zero")
         else:
-            request['price'] = stop_price
+            bid = MetaTrader5.symbol_info_tick(symbol).bid
+            if bid < stop_price:
+                request['price'] = bid
+            else:
+                request['price'] = stop_price
     elif order_type == "SELL":
         request['type'] = MetaTrader5.ORDER_TYPE_SELL
         request['action'] = MetaTrader5.TRADE_ACTION_DEAL
