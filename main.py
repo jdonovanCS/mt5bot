@@ -98,6 +98,17 @@ def run_strategy(project_settings, cancel_outstanding=True):
     # Return True. Previous code will throw a breaking error if anything goes wrong.
     return True
 
+def get_time(timeframe):
+    time_candle = mt5_lib.get_candlesticks(
+        symbol="EURUSD",
+        timeframe=timeframe,
+        number_of_candles=1
+    )
+    if len(time_candle) < 1:
+        raise Exception(f"Retrieving current time failed.")
+    # Extract the time
+    current_time = time_candle['time'][0]
+    return current_time
 
 # Main function
 if __name__ == '__main__':
@@ -130,16 +141,10 @@ if __name__ == '__main__':
         timeframe = project_settings["mt5"]["timeframe"]
         # Start while loop
         while 1:
+            # Update trailing stops for any positions
+            mt5_lib.update_trailing_stops(10)
             # Get a value for current time. Use BTCUSD as it trades 24/7
-            time_candle = mt5_lib.get_candlesticks(
-                symbol="EURUSD",
-                timeframe=timeframe,
-                number_of_candles=1
-            )
-            if len(time_candle) < 1:
-                raise Exception(f"Retrieving current time failed.")
-            # Extract the time
-            current_time = time_candle['time'][0]
+            current_time = get_time(timeframe)
             # Compare the current time against the previous time.
             if current_time != previous_time:
                 # This means that a new candle has occurred. Proceed with strategy

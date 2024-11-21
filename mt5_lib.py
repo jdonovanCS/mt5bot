@@ -231,7 +231,7 @@ def place_order(order_type, symbol, volume, stop_loss, take_profit, comment, sto
         "tp": take_profit,
         "type_time": MetaTrader5.ORDER_TIME_GTC,
         "comment": comment,
-        "deviation": 30
+        "deviation": 8
     }
     # Create the order type based on values
     if order_type == "SELL_STOP":
@@ -242,7 +242,12 @@ def place_order(order_type, symbol, volume, stop_loss, take_profit, comment, sto
         if stop_price <= 0:
             raise ValueError("Stop price cannot be zero")
         else:
-            request['price'] = stop_price
+            bid = MetaTrader5.symbol_info_tick(symbol).bid
+            pip = MetaTrader5.symbol_info(symbol).trade_tick_size*10
+            if bid*10 < stop_price:
+                request['price'] = bid
+            else:
+                request['price'] = stop_price
     elif order_type == "BUY_STOP":
         # Update the request
         request['type'] = MetaTrader5.ORDER_TYPE_BUY_STOP
@@ -252,8 +257,9 @@ def place_order(order_type, symbol, volume, stop_loss, take_profit, comment, sto
         if stop_price <= 0:
             raise ValueError("Stop Price cannot be zero")
         else:
+            pip = MetaTrader5.symbol_info(symbol).trade_tick_size*10
             ask = MetaTrader5.symbol_info_tick(symbol).ask
-            if ask > stop_price:
+            if ask > stop_price*10:
                 request['price'] = ask
             else:
                 request['price'] = stop_price
@@ -264,11 +270,7 @@ def place_order(order_type, symbol, volume, stop_loss, take_profit, comment, sto
         if stop_price <= 0:
             raise ValueError("Stop price cannot be zero")
         else:
-            bid = MetaTrader5.symbol_info_tick(symbol).bid
-            if bid < stop_price:
-                request['price'] = bid
-            else:
-                request['price'] = stop_price
+            request['price'] = stop_price
     elif order_type == "SELL":
         request['type'] = MetaTrader5.ORDER_TYPE_SELL
         request['action'] = MetaTrader5.TRADE_ACTION_DEAL
@@ -388,15 +390,13 @@ def cancel_order(order_number, symbol=None):
     # Create the request
     request = {
         "action": MetaTrader5.TRADE_ACTION_REMOVE,
-        "order": order_number,
-        "position": order_number,
+        "order": order_number.ticket,
+        "position_id": order_number,
         "comment": "order removed"
     }
     # Attempt to send the order to MT5
     try:
         order_result = MetaTrader5.order_send(request)
-        print(f'cancel request: {request}')
-        print(f'cancel order: {order_result}')
         if order_result[0] == 10009:
             print(f"Order {order_number} successfully cancelled")
             return True
@@ -410,20 +410,27 @@ def cancel_order(order_number, symbol=None):
         raise Exception
 
 # Function to Cancel a position on MT5
-def close_position(ticket_number, symbol=None):
+def close_position(position):
     """
     Function to close a position identified by a ticket number
     :param ticket_number: int representing the ticket number from MT5
     :return: Boolean. True = closed. False == Not closed.
     """
     # Create the request
+    tick = MetaTrader5.symbol_info_tick(position.symbol)
+    print(position.ticket)
     request = {
         "action": MetaTrader5.TRADE_ACTION_DEAL,
-        "position": ticket_number,
-        "symbol": symbol,
+        "position": position.ticket,
+        "symbol": position.symbol,
         "comment": "order removed",
-        "volume": "",
-        "type": MetaTrader5.ORDER_TYPE_CLOSE
+        "volume": position.volume,
+        "type": MetaTrader5.ORDER_TYPE_BUY if position.type == 1 else MetaTrader5.ORDER_TYPE_SELL,
+        "price": tick.ask if position.type == 1 else tick.bid,
+        "devation": 20,
+        "magic": 100,
+        "type_time": MetaTrader5.ORDER_TIME_GTC,
+        "type_filling": MetaTrader5.ORDER_FILLING_IOC
     }
     # Attempt to send the order to MT5
     try:
@@ -431,7 +438,7 @@ def close_position(ticket_number, symbol=None):
         print(f'cancel request: {request}')
         print(f'cancel order: {order_result}')
         if order_result[0] == 10009:
-            print(f"Order {order_number} successfully cancelled")
+            print(f"position {order_number} successfully closed")
             return True
         # You can put custom error handling if needed
         else:
@@ -532,14 +539,14 @@ def get_filtered_list_of_positions(symbol, comment):
     # Create a list to store the open order numbers
     positions = []
     # Iterate through the dataframe and add order numbers to the list
-    for order in positions_dataframe['ticket']:
-        positions.append(order)
+    for position in positions_dataframe:
+        positions.append(position)
     # Return the open orders
     return positions
 
 
 # Function to close positions based upon filters
-def close_filtered_positions(symbol, comment):
+def close_filtered_positions(symbol, pos_type, comment):
     """
     Function to close a list of filtered positions. Based upon two filters: symbol and comment string.
     :param symbol: string of symbol
@@ -554,10 +561,26 @@ def close_filtered_positions(symbol, comment):
     if len(positions) > 0:
         # Iterate through and cancel
         for position in positions:
-            cancel_outcome = close_position(position.ticket, symbol)
-            if cancel_outcome is not True:
-                return False
+            if position.type == pos_type:
+                cancel_outcome = close_position(position)
+                if cancel_outcome is not True:
+                    return False
         # At conclusion of iteration, return true
         return True
     else:
         return True
+
+
+def update_trailing_stops(trailing_stop_pips=10):
+    positions = MetaTrader5.positions_get()
+    for position in positions:
+        current_price = MetaTrader5.symbol_info_tick(position.symbol).bid if position.type == MetaTrader5.ORDER_TYPE_BUY else MetaTrader5.symbol_info_tick(position.symbol).ask
+        stop_loss = position.sl
+        if (position.type == MetaTrader5.ORDER_TYPE_BUY and current_price > stop_loss + (trailing_stop_pips*MetaTrader5.symbol_info(position.symbol).point)) or (position.type == MetaTrader5.ORDER_TYPE_SELL and current_price < stop_loss - (trailing_stop_pips*MetaTrader5.symbol_info(position.symbol).point)):
+            request = {
+                "action": MetaTrader5.TRADE_ACTION_SLTP,
+                "position": position.ticket,
+                "sl": current_price - (trailing_stop_pips * MetaTrader5.symbol_info(position.symbol).point) if position.type == MetaTrader5.ORDER_TYPE_BUY else current_price + (trailing_stop_pips * MetaTrader5.symbol_info(position.symbol).point)
+            }
+            MetaTrader5.order_send(request)
+    
