@@ -48,105 +48,124 @@ def calculate_delta(option_type, S, K, T, r, sigma):
 
 project_settings = get_project_settings(import_filepath=settings_filepath)
 
-# # Initialize the polygon.io client
-# client = polygon.RESTClient(api_key="AkeRGpCLIo4L7TEAyd6nzpBctsnMJtO_")
-
 pd.set_option('display.max_columns', None)
 pd.set_option('display.max_rows', None)
 
-yf_ticker = yf.Ticker('cost')
+def get_delta_values(ticker, dte):
 
-print(yf_ticker.options)
+    yf_ticker = yf.Ticker(ticker)
+    print(f'Retrieving options for {ticker}:\nyf_ticker.options')
+    
+    risk_free_rate = web.DataReader('SOFR', 'fred', datetime.datetime.today()-datetime.timedelta(days=2), datetime.datetime.today())['SOFR'].iloc[-1]
+    print(f'Retrieving risk-free interest rate: {risk_free_rate}')
 
-count = 0
-# while datetime.datetime.strptime(yf_ticker.options[count], "%Y-%m-%d").date() - datetime.date.today() < datetime.timedelta(190):
-#     if calls is None:
-#         calls = pd.DataFrame(yf_ticker.option_chain(date=yf_ticker.options[count]))
-#     else:
-#         calls = calls + yf_ticker.option_chain(date=yf_ticker.options[count])
-
-
-# only gets calls expiring this day.
-options_chain = yf_ticker.option_chain(date='2024-12-27')
-
-# print(pd.DataFrame(options_chain.calls)[['volume', 'strike']])
-
-# options_chain = yf_ticker.option_chain(date=dte_50)
-
-# print(pd.DataFrame(options_chain.calls)[['volume', 'strike']])
+    current_price = yf_ticker.info['currentPrice']
+    print(f'Retrieving current price: {current_price}')
 
 
-sofr_data = web.DataReader('SOFR', 'fred', datetime.datetime.today()-datetime.timedelta(days=2), datetime.datetime.today())
-print(sofr_data.tail())
-risk_free_rate = sofr_data['SOFR'][-1]
-print(risk_free_rate)
+    count = 0
+    while datetime.datetime.strptime(yf_ticker.options[count], "%Y-%m-%d").date() - datetime.date.today() < datetime.timedelta(dte):
+        if (datetime.datetime.strptime(yf_ticker.options[count], "%Y-%m-%d") - pd.Timestamp.today()).days < 1:
+            count+=1
+            continue
+        calls = pd.DataFrame(yf_ticker.option_chain(date=yf_ticker.options[count]).calls).sort_values(by=['strike'])
+        calls = calls[(calls['strike'] > current_price - current_price*.20) & (calls['strike'] < current_price + current_price*.20)]
+        calls['delta'] = calls.apply(lambda row: calculate_delta('call', current_price, row['strike'], 
+                                                        ((datetime.datetime.strptime(yf_ticker.options[count], "%Y-%m-%d") - pd.Timestamp.today()).days / 365), 
+                                                        risk_free_rate/100, row['impliedVolatility']), axis=1)
+        calls['delta_dollars'] = (calls['delta'])*calls['openInterest']*10
+
+        puts = pd.DataFrame(yf_ticker.option_chain(date=yf_ticker.options[count]).puts).sort_values(by=['strike'])
+        puts = puts[(puts['strike'] > current_price - current_price*.20) & (puts['strike'] < current_price + current_price*.20)]
+        puts['delta'] = puts.apply(lambda row: calculate_delta('put', current_price, row['strike'], 
+                                                        ((datetime.datetime.strptime(yf_ticker.options[count], "%Y-%m-%d") - pd.Timestamp.today()).days / 365), 
+                                                        risk_free_rate/100, row['impliedVolatility']), axis=1)
+        puts['delta_dollars'] = (puts['delta'])*puts['openInterest']*-1*10
+
+        if 'total_calls' not in locals():
+            total_calls = pd.DataFrame(calls[['delta_dollars', 'strike']])
+            total_calls['total_dollars'] = total_calls['delta_dollars']
+            total_calls = total_calls[['strike', 'total_dollars']]
+            total_puts = pd.DataFrame(puts[['delta_dollars', 'strike']])
+            total_puts['total_dollars'] = total_puts['delta_dollars']
+            total_puts = total_puts[['strike', 'total_dollars']]
+
+        else:
+            total_calls = total_calls.merge(pd.DataFrame(calls[['delta_dollars', 'strike']]), left_on='strike', right_on='strike', how='outer')
+            total_calls['total_dollars'] = total_calls['total_dollars'].fillna(0)
+            total_calls['delta_dollars'] = total_calls['delta_dollars'].fillna(0)
+            total_calls['total_dollars'] = total_calls['delta_dollars'] + total_calls['total_dollars']
+            total_calls = total_calls[['strike', 'total_dollars']]
+            total_puts = total_puts.merge(pd.DataFrame(puts[['delta_dollars', 'strike']]), left_on='strike', right_on='strike', how='outer')
+            total_puts['total_dollars'] = total_puts['total_dollars'].fillna(0)
+            total_puts['delta_dollars'] = total_puts['delta_dollars'].fillna(0)
+            total_puts['total_dollars'] = total_puts['delta_dollars'] + total_puts['total_dollars']
+            total_puts = total_puts[['strike', 'total_dollars']]
+        count+=1
+
+    print(total_calls)
+    print(total_puts)
+    combined = total_calls.merge(total_puts, right_on='strike', left_on='strike', how='outer', suffixes=('_calls', '_puts'))
+    combined['total_dollars_calls'] = combined['total_dollars_calls'].fillna(0)
+    combined['total_dollars_puts'] = combined['total_dollars_puts'].fillna(0)
+    combined['difference'] = combined['total_dollars_calls'] - combined['total_dollars_puts']
+    print(combined)
 
 
-calls = pd.DataFrame(options_chain.calls).sort_values(by=['strike'])
-
-
-
-puts  = pd.DataFrame(options_chain.puts).sort_values(by=['strike'])
-
-
-current_price = yf_ticker.info['currentPrice']
-print(f"Current price: {current_price}")
-
-print(calls.columns)
-
-calls = calls[(calls['strike'] > current_price - current_price*.15) & (calls['strike'] < current_price + current_price*.15)]
-puts = puts[(puts['strike'] > current_price - current_price*.15) & (puts['strike'] < current_price + current_price*.15)]
-
-
-# I think I'm doing time to expiry correctly now.. see keep for original ai-generated code.
-calls['delta'] = calls.apply(lambda row: calculate_delta('call', current_price, row['strike'], 
-                                                        ((datetime.datetime.strptime('2024-12-27', "%Y-%m-%d") - pd.Timestamp.today()).days / 365), 
-                                                        risk_free_rate, row['impliedVolatility']), axis=1)
-
-
-puts['delta'] = puts.apply(lambda row: calculate_delta('put', current_price, row['strike'], 
-                                                        ((datetime.datetime.strptime('2024-12-27', "%Y-%m-%d") - pd.Timestamp.today()).days / 365), 
-                                                        risk_free_rate, row['impliedVolatility']), axis=1)
-
-
-
-calls['volume'] = calls['volume'].fillna(0)
-puts['volume'] = puts['volume'].fillna(0)
-
-calls['delta_dollars'] = (calls['delta']+calls['lastPrice'])*calls['volume']*100
-puts['delta_dollars'] = (puts['delta']-puts['lastPrice'])*puts['volume']*100*-1
-
-print(calls[['strike', 'lastPrice', 'volume', 'openInterest', 'delta', 'delta_dollars', 'lastTradeDate']])
-print(puts[['strike', 'lastPrice', 'volume', 'openInterest', 'delta', 'delta_dollars']])
-
-# combined = pd.DataFrame(columns=['volume_put', 'volume_call', 'delta_put', 'delta_call', 'strike', 'last_price_put', 'last_price_call'])
-# for i, row in calls.iterrows():
-
-#     if not math.isnan(row['strike']) and round(row['strike'], 1) in round(puts['strike'],1):
-        
-#         strike = row['strike']
-#         volume_put = puts[puts['strike'] == row['strike']]['volume'].values
-#         volume_call = calls[calls['strike'] == row['strike']]['volume'].values
-#         delta_put = puts[puts['strike'] == row['strike']]['delta'].values
-#         delta_call = calls[calls['strike'] == row['strike']]['delta'].values
-#         last_price_put = puts[puts['strike'] == row['strike']]['lastPrice'].values
-#         last_price_call = calls[calls['strike'] == row['strike']]['lastPrice'].values
-#         if volume_put.size > 0 and volume_call.size > 0 and not math.isnan(volume_put[0]) and not math.isnan(volume_call[0]):
-#             combined = pd.concat([combined, pd.DataFrame([{'strike': strike, 'volume_put': volume_put[0], 'volume_call': volume_call[0], 'delta_put': delta_put[0], 'delta_call': delta_call[0], 'last_price_put': last_price_put[0], 'last_price_call': last_price_call[0]}])])
-        
-# combined['delta_dollars_put'] = (combined['delta_put']+current_price+combined['last_price_put']) * combined['volume_put']
-# combined['delta_dollars_call'] = (combined['delta_call']+current_price+combined['last_price_call']) * combined['volume_call']
-# combined['delta_dollars_diff'] = combined['delta_dollars_call'] - combined['delta_dollars_put']
-
-# combined['difference_in_volume'] = combined['volume_call'] - combined['volume_put']
-# print('positive value in difference means higher call, negative means higher put')
-# print(combined)
+get_delta_values('ccj', 50)
 
 
 
 
-# # Get options data for a symbol
-# options_data = client.list_options_contracts(underlying_ticker="AAPL")
+# # only gets calls expiring this day.
+# options_chain = yf_ticker.option_chain(date='2024-12-20')
 
-# for contract in options_data:
-#     print(contract)
+# # print(pd.DataFrame(options_chain.calls)[['volume', 'strike']])
+
+# # options_chain = yf_ticker.option_chain(date=dte_50)
+
+# # print(pd.DataFrame(options_chain.calls)[['volume', 'strike']])
+
+
+# sofr_data = web.DataReader('SOFR', 'fred', datetime.datetime.today()-datetime.timedelta(days=2), datetime.datetime.today())
+# # print(sofr_data.tail())
+# risk_free_rate = sofr_data['SOFR'][-1]
+# print(f'Risk Free Rate: {risk_free_rate}')
+
+
+# calls = pd.DataFrame(options_chain.calls).sort_values(by=['strike'])
+
+
+
+# puts  = pd.DataFrame(options_chain.puts).sort_values(by=['strike'])
+
+
+# current_price = yf_ticker.info['currentPrice']
+# print(f"Current price: {current_price}")
+
+# print(calls.columns)
+
+# calls = calls[(calls['strike'] > current_price - current_price*.20) & (calls['strike'] < current_price + current_price*.20)]
+# puts = puts[(puts['strike'] > current_price - current_price*.20) & (puts['strike'] < current_price + current_price*.20)]
+
+
+# # I think I'm doing time to expiry correctly now.. see keep for original ai-generated code.
+# calls['delta'] = calls.apply(lambda row: calculate_delta('call', current_price, row['strike'], 
+#                                                         ((datetime.datetime.strptime('2024-12-20', "%Y-%m-%d") - pd.Timestamp.today()).days / 365), 
+#                                                         risk_free_rate/100, row['impliedVolatility']), axis=1)
+
+
+# puts['delta'] = puts.apply(lambda row: calculate_delta('put', current_price, row['strike'], 
+#                                                         ((datetime.datetime.strptime('2024-12-20', "%Y-%m-%d") - pd.Timestamp.today()).days / 365), 
+#                                                         risk_free_rate/100, row['impliedVolatility']), axis=1)
+
+
+
+# calls['volume'] = calls['volume'].fillna(0)
+# puts['volume'] = puts['volume'].fillna(0)
+
+# calls['delta_dollars'] = (calls['delta'])*calls['openInterest']*10
+# puts['delta_dollars'] = (puts['delta'])*puts['openInterest']*-1*10
+
+# print(calls[['strike', 'lastPrice', 'volume', 'openInterest', 'delta', 'delta_dollars']])
+# print(puts[['strike', 'lastPrice', 'volume', 'openInterest', 'delta', 'delta_dollars']])
