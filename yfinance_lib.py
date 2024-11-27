@@ -9,7 +9,12 @@ import math
 import datetime
 import numpy as np
 from scipy.stats import norm
+import argparse
 
+
+parser=argparse.ArgumentParser()
+parser.add_argument("--symbol")
+args = parser.parse_args()
 
 # Location of settings.json
 settings_filepath = "settings.json" # <- This can be modified to be your own settings filepath
@@ -54,29 +59,27 @@ pd.set_option('display.max_rows', None)
 def get_delta_values(ticker, dte):
 
     yf_ticker = yf.Ticker(ticker)
-    print(f'Retrieving options for {ticker}:\nyf_ticker.options')
+    # print(f'Retrieving options for {ticker}:\nyf_ticker.options')
     
-    risk_free_rate = web.DataReader('SOFR', 'fred', datetime.datetime.today()-datetime.timedelta(days=2), datetime.datetime.today())['SOFR'].iloc[-1]
-    print(f'Retrieving risk-free interest rate: {risk_free_rate}')
+    risk_free_rate = web.DataReader('SOFR', 'fred', datetime.datetime.today()-datetime.timedelta(days=5), datetime.datetime.today())['SOFR'].iloc[-1]
+    # print(f'Retrieving risk-free interest rate: {risk_free_rate}')
 
-    current_price = yf_ticker.info['currentPrice']
-    print(f'Retrieving current price: {current_price}')
-
+    current_price = get_current_price(ticker)
 
     count = 0
-    while datetime.datetime.strptime(yf_ticker.options[count], "%Y-%m-%d").date() - datetime.date.today() < datetime.timedelta(dte):
+    while count < len(yf_ticker.options) and datetime.datetime.strptime(yf_ticker.options[count], "%Y-%m-%d").date() - datetime.date.today() < datetime.timedelta(dte):
         if (datetime.datetime.strptime(yf_ticker.options[count], "%Y-%m-%d") - pd.Timestamp.today()).days < 1:
             count+=1
             continue
-        calls = pd.DataFrame(yf_ticker.option_chain(date=yf_ticker.options[count]).calls).sort_values(by=['strike'])
-        calls = calls[(calls['strike'] > current_price - current_price*.20) & (calls['strike'] < current_price + current_price*.20)]
+        calls = pd.DataFrame(yf_ticker.option_chain(date=yf_ticker.options[count]).calls).sort_values(by=['strike'], ascending=False)
+        calls = calls[(calls['strike'] > current_price - current_price*.30) & (calls['strike'] < current_price + current_price*.30)]
         calls['delta'] = calls.apply(lambda row: calculate_delta('call', current_price, row['strike'], 
                                                         ((datetime.datetime.strptime(yf_ticker.options[count], "%Y-%m-%d") - pd.Timestamp.today()).days / 365), 
                                                         risk_free_rate/100, row['impliedVolatility']), axis=1)
         calls['delta_dollars'] = (calls['delta'])*calls['openInterest']*10
 
-        puts = pd.DataFrame(yf_ticker.option_chain(date=yf_ticker.options[count]).puts).sort_values(by=['strike'])
-        puts = puts[(puts['strike'] > current_price - current_price*.20) & (puts['strike'] < current_price + current_price*.20)]
+        puts = pd.DataFrame(yf_ticker.option_chain(date=yf_ticker.options[count]).puts).sort_values(by=['strike'], ascending=False)
+        puts = puts[(puts['strike'] > current_price - current_price*.30) & (puts['strike'] < current_price + current_price*.30)]
         puts['delta'] = puts.apply(lambda row: calculate_delta('put', current_price, row['strike'], 
                                                         ((datetime.datetime.strptime(yf_ticker.options[count], "%Y-%m-%d") - pd.Timestamp.today()).days / 365), 
                                                         risk_free_rate/100, row['impliedVolatility']), axis=1)
@@ -103,16 +106,36 @@ def get_delta_values(ticker, dte):
             total_puts = total_puts[['strike', 'total_dollars']]
         count+=1
 
-    print(total_calls)
-    print(total_puts)
-    combined = total_calls.merge(total_puts, right_on='strike', left_on='strike', how='outer', suffixes=('_calls', '_puts'))
-    combined['total_dollars_calls'] = combined['total_dollars_calls'].fillna(0)
-    combined['total_dollars_puts'] = combined['total_dollars_puts'].fillna(0)
-    combined['difference'] = combined['total_dollars_calls'] - combined['total_dollars_puts']
-    print(combined)
+    # print(total_calls)
+    # print(total_puts)
+    if 'total_calls' in locals():
+        combined = total_calls.merge(total_puts, right_on='strike', left_on='strike', how='outer', suffixes=('_calls', '_puts'))
+        combined['total_dollars_calls'] = combined['total_dollars_calls'].fillna(0)
+        combined['total_dollars_puts'] = combined['total_dollars_puts'].fillna(0)
+        combined['difference'] = combined['total_dollars_calls'] - combined['total_dollars_puts']
+        combined = combined.sort_values(by=['strike'], ascending=False)
+    # print(combined)
+
+        return combined
+    return None
 
 
-get_delta_values('ccj', 50)
+def get_ticker_data(ticker):
+    yf_ticker = yf.Ticker(ticker)
+    return yf_ticker.history(period="1mo")
+
+def get_current_price(ticker):
+    yf_ticker = yf.Ticker(ticker)
+    if hasattr(yf_ticker.info, 'currentPrice'):
+        current_price = yf_ticker.info['currentPrice']
+    else:
+        current_price=yf_ticker.history()['Close'].iloc[-1]
+    return current_price
+
+
+if args.symbol:
+    print(get_delta_values(args.symbol, 350))
+
 
 
 

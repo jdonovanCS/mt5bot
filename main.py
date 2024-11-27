@@ -3,11 +3,20 @@ import os
 import time
 
 import pandas
+import numpy as np
+import argparse
+from tqdm import tqdm
+
+parser=argparse.ArgumentParser()
+parser.add_argument("--symbol")
+args = parser.parse_args()
 
 # Custom Libraries
-import mt5_lib
-import ema_cross_strategy
+# import mt5_lib
+# import ema_cross_strategy
 import indicator_lib
+import tradingview_lib
+import yfinance_lib
 
 # Location of settings.json
 settings_filepath = "settings.json" # <- This can be modified to be your own settings filepath
@@ -116,12 +125,50 @@ if __name__ == '__main__':
     # Import settings.json
     project_settings = get_project_settings(import_filepath=settings_filepath)
     # Run through startup proceedure
-    startup = start_up(project_settings=project_settings)
+    # startup = start_up(project_settings=project_settings)
     # Make it so that all columns are shown
     pandas.set_option('display.max_columns', None)
 
-    # If Startup successful, start trading while loop
-    if startup:
+    dte = 50
+
+    if args.symbol:
+        symbols_to_observe = [args.symbol]
+    else:
+        # symbols_to_observe = tradingview_lib.get_most_active()['name']
+        symbols_to_observe = tradingview_lib.get_most_volume()['name']
+        # symbols_to_observe = tradingview_lib.get_most_obv()['name']
+
+    symbols_with_good_obv = {}
+    symbols_with_good_deltas = {}
+
+    for symbol in tqdm(symbols_to_observe):
+        ticker_data = yfinance_lib.get_ticker_data(symbol)
+        obv = (np.sign(ticker_data['Close'].diff())*ticker_data['Volume']).fillna(0).cumsum()[-4:]
+        if len(obv) > 3 and obv.iloc[3] > obv.iloc[2] and obv.iloc[2] > obv.iloc[1] and obv.iloc[1] > obv.iloc[0]:
+            symbols_with_good_obv[symbol] = obv
+
+    print(f'Symbols with good on-balance volume: {symbols_with_good_obv}')
+    
+    for symbol in tqdm(symbols_with_good_obv):
+        deltas = yfinance_lib.get_delta_values(symbol, dte)
+        current_price = yfinance_lib.get_current_price(symbol)
+        if deltas is None:
+            continue
+        indices_near_current_price = deltas.iloc[(deltas['strike']-current_price).abs().argsort()[:6]].index.tolist()
+        for i in indices_near_current_price:
+            if deltas.iloc[i]['difference'] < 0:
+                break
+            else:
+                if i == indices_near_current_price[len(indices_near_current_price)-1]:
+                    symbols_with_good_deltas[symbol] = deltas
+    
+    print(f'Symbols with good deltas too:\n{symbols_with_good_deltas}')
+    print(f'Recommended: {list(symbols_with_good_deltas.keys())}')
+
+
+        
+
+    if False == True:
         if len(project_settings['mt5']['symbols']) == 0:
             project_settings["mt5"]["symbols"] = symbols = mt5_lib.get_all_mt5_symbols()
         symbols = project_settings["mt5"]["symbols"]

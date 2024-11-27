@@ -583,4 +583,15 @@ def update_trailing_stops(trailing_stop_pips=10):
                 "sl": current_price - (trailing_stop_pips * MetaTrader5.symbol_info(position.symbol).point) if position.type == MetaTrader5.ORDER_TYPE_BUY else current_price + (trailing_stop_pips * MetaTrader5.symbol_info(position.symbol).point)
             }
             MetaTrader5.order_send(request)
+
+def get_market_depth(symbol):
+    market_depth = MetaTrader5.market_book_get(symbol)
+    print(f"Order book for {symbol}: ")
+    print(MetaTrader5.last_error())
+    print('Bids: ')
+    for bid in market_depth.bids:
+        print(bid)
+    print('Asks: ')
+    for ask in market_depth.asks:
+        print(ask)
     
